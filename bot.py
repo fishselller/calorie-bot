@@ -14,7 +14,7 @@ import urllib.request
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN = "8911085987:AAGeZYdvsZlz3j_YDT30RhASI2dIKDUYLWc"
 GEMINI_API_KEY = "AIzaSyC_C67WdsZ02aJ7vkACjAvHFksiyGB2YuA"
-GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
 KYIV_TZ = pytz.timezone("Europe/Kyiv")
 DB_PATH = "calories.db"
 
@@ -95,12 +95,11 @@ async def get_all_users():
         async with db.execute("SELECT user_id FROM users") as cursor:
             return [row[0] for row in await cursor.fetchall()]
 
-# ─── GEMINI ───────────────────────────────────────────────────────────────────
+# ─── GEMINI (без поиска — встроенные знания) ──────────────────────────────────
 def ask_gemini(prompt):
     payload = json.dumps({
         "contents": [{"parts": [{"text": prompt}]}],
-        "tools": [{"google_search": {}}],
-        "generationConfig": {"temperature": 0.1}
+        "generationConfig": {"temperature": 0.1, "maxOutputTokens": 500}
     }).encode("utf-8")
     req = urllib.request.Request(
         GEMINI_URL, data=payload,
@@ -115,16 +114,17 @@ def ask_gemini(prompt):
     return ""
 
 def search_and_calculate(product_name, weight_grams):
-    prompt = f"""Найди в интернете калорийность и БЖУ на 100г продукта: "{product_name}".
-Используй calorizator.ru, fatsecret.ru или USDA.
+    prompt = f"""Ты эксперт по питанию. Дай точные данные о калорийности и БЖУ продукта на 100г.
+
+Продукт: "{product_name}"
+Вес порции: {weight_grams}г
+
+Используй стандартные значения (как в USDA или calorizator.ru).
 Рассчитай для {weight_grams}г.
-Верни ТОЛЬКО JSON без markdown:
-{{
-  "product_name": "название",
-  "per_100g": {{"calories": число, "protein": число, "fat": число, "carbs": число}},
-  "for_weight": {{"calories": число, "protein": число, "fat": число, "carbs": число}},
-  "source": "источник"
-}}"""
+
+Ответь ТОЛЬКО в формате JSON, без лишнего текста, без markdown:
+{{"product_name": "название продукта", "per_100g": {{"calories": число, "protein": число, "fat": число, "carbs": число}}, "for_weight": {{"calories": число, "protein": число, "fat": число, "carbs": число}}, "source": "USDA / calorizator.ru"}}"""
+
     text = ask_gemini(prompt)
     text = text.strip().replace("```json", "").replace("```", "").strip()
     m = re.search(r'\{.*\}', text, re.DOTALL)
@@ -200,11 +200,10 @@ async def cmd_start(message: Message):
     await message.answer(
         f"👋 Привет, {message.from_user.first_name}!\n\n"
         "Я считаю калории по названию продукта 🍎\n\n"
-        "📝 *Просто напиши продукт и вес:*\n"
+        "📝 *Напиши продукт и вес:*\n"
         "`банан 150`\n`овсянка на воде 200`\n`куриная грудка 180г`\n`греческий йогурт 250`\n\n"
-        "Найду данные в интернете и всё посчитаю!\n\n"
         "📋 *Команды:*\n"
-        "/today — что ел сегодня\n/report — отчёт прямо сейчас\n/undo — удалить последнюю запись\n/help — помощь\n\n"
+        "/today — что ел сегодня\n/report — отчёт прямо сейчас\n/undo — удалить последнюю запись\n\n"
         "⏰ Каждый день в *21:00* по Киеву — автоматический отчёт",
         parse_mode="Markdown")
 
@@ -212,7 +211,6 @@ async def cmd_start(message: Message):
 async def cmd_help(message: Message):
     await message.answer(
         "📝 *Как добавить продукт:*\n\n"
-        "Напиши название и вес:\n\n"
         "`банан 120`\n`рис варёный 200г`\n`творог 5% 150`\n\n"
         "📋 *Команды:*\n"
         "/today — что ел сегодня\n/report — отчёт прямо сейчас\n/undo — удалить последнюю запись",
@@ -257,7 +255,7 @@ async def handle_text(message: Message):
 
     product, weight = parsed["product"], parsed["weight"]
     await save_user(message.from_user.id, message.from_user.username or "", message.from_user.first_name or "")
-    msg = await message.answer(f"🔍 Ищу данные о *{product}*...", parse_mode="Markdown")
+    msg = await message.answer(f"🔍 Считаю калории для *{product}*...", parse_mode="Markdown")
 
     try:
         result = await asyncio.get_event_loop().run_in_executor(
@@ -277,15 +275,14 @@ async def handle_text(message: Message):
             f"💪 Белки:   *{data['protein']:.1f} г*\n"
             f"🧈 Жиры:    *{data['fat']:.1f} г*\n"
             f"🍞 Углеводы: *{data['carbs']:.1f} г*\n\n"
-            f"📊 _На 100г: {p100.get('calories',0):.0f} ккал | Б {p100.get('protein',0):.1f} | Ж {p100.get('fat',0):.1f} | У {p100.get('carbs',0):.1f}_\n"
-            f"🌐 _Источник: {result.get('source','интернет')}_\n\n"
+            f"📊 _На 100г: {p100.get('calories',0):.0f} ккал | Б {p100.get('protein',0):.1f} | Ж {p100.get('fat',0):.1f} | У {p100.get('carbs',0):.1f}_\n\n"
             f"_Записано! /today — посмотреть всё за сегодня_",
             parse_mode="Markdown")
 
     except Exception as e:
         logger.error(f"Error: {e}")
         await msg.edit_text(
-            f"❌ Не удалось найти *{product}*.\n\nПопробуй точнее: `овсянка геркулес` или `банан спелый`",
+            f"❌ Не удалось найти *{product}*.\n\nПопробуй написать по-другому, например:\n`банан спелый 150` или `овсяная каша 200`",
             parse_mode="Markdown")
 
 # ─── MAIN ─────────────────────────────────────────────────────────────────────
