@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 import re
@@ -9,9 +10,14 @@ from aiogram.types import Message
 from app.db.engine import AsyncSessionLocal
 from app.db.models import User, Product
 from app.localization.texts import t
-from app.config import OPENAI_API_KEY
+from app.config import GEMINI_API_KEY
 
 router = Router()
+
+GEMINI_VISION_URL = (
+    "https://generativelanguage.googleapis.com/v1beta/models/"
+    "gemini-1.5-flash-latest:generateContent?key=" + "{key}"
+)
 
 
 async def _get_or_create_user(uid: int, session) -> User:
@@ -23,43 +29,42 @@ async def _get_or_create_user(uid: int, session) -> User:
     return user
 
 
-def _analyse_with_openai(image_bytes: bytes) -> dict | None:
+def _call_gemini_vision(image_bytes: bytes) -> dict | None:
     b64 = base64.standard_b64encode(image_bytes).decode()
     prompt = (
-        "This is a food packaging photo. Extract the product name and nutrition facts per 100g. "
-        'Reply ONLY with JSON, no markdown: {"product_name":"...","per_100g":{"calories":0,"protein":0,"fat":0,"carbs":0}}'
+        "На фото упаковка продукта. Извлеки название продукта и пищевую ценность на 100г. "
+        'Ответь ТОЛЬКО JSON без markdown: {"product_name":"...","per_100g":{"calories":0,"protein":0,"fat":0,"carbs":0}}'
     )
     payload = json.dumps({
-        "model": "gpt-4o-mini",
-        "max_tokens": 400,
-        "messages": [{
-            "role": "user",
-            "content": [
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-                {"type": "text", "text": prompt},
+        "contents": [{
+            "parts": [
+                {"inline_data": {"mime_type": "image/jpeg", "data": b64}},
+                {"text": prompt},
             ]
-        }]
+        }],
+        "generationConfig": {"temperature": 0.1, "maxOutputTokens": 400},
     }).encode()
 
+    url = GEMINI_VISION_URL.format(key=GEMINI_API_KEY)
     req = urllib.request.Request(
-        "https://api.openai.com/v1/chat/completions",
-        data=payload,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {OPENAI_API_KEY}",
-        },
+        url, data=payload,
+        headers={"Content-Type": "application/json"},
         method="POST"
     )
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read().decode())
-        text = data["choices"][0]["message"]["content"]
+        text = ""
+        for c in data.get("candidates", []):
+            for p in c.get("content", {}).get("parts", []):
+                if "text" in p:
+                    text += p["text"]
         text = re.sub(r'```json|```', '', text).strip()
         m = re.search(r'\{.*\}', text, re.DOTALL)
         if m:
             return json.loads(m.group())
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Gemini Vision error: {e}")
     return None
 
 
@@ -71,14 +76,13 @@ async def handle_photo(message: Message, bot: Bot) -> None:
 
     processing = await message.answer(t("photo_processing", lang))
 
-    photo  = message.photo[-1]
-    file   = await bot.get_file(photo.file_id)
-    buf    = await bot.download_file(file.file_path)
-    img    = buf.read()
+    photo = message.photo[-1]
+    file  = await bot.get_file(photo.file_id)
+    buf   = await bot.download_file(file.file_path)
+    img   = buf.read()
 
-    import asyncio
     result = await asyncio.get_event_loop().run_in_executor(
-        None, lambda: _analyse_with_openai(img)
+        None, lambda: _call_gemini_vision(img)
     )
 
     if not result or "per_100g" not in result:
