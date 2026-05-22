@@ -6,8 +6,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Product
-from app.services.food_db import lookup
-from app.services.gemini import ask_nutrition
 
 
 @dataclass
@@ -26,10 +24,13 @@ async def resolve(
     grams: float,
     session: AsyncSession,
 ) -> Optional[NutritionResult]:
+    import app.services.food_db as food_db
+    import app.services.gemini as gemini
+
     factor = grams / 100.0
 
     # 1. Built-in DB
-    match = lookup(raw_name)
+    match = food_db.lookup(raw_name)
     if match:
         name, (kcal, prot, fat, carb) = match
         return NutritionResult(
@@ -56,10 +57,10 @@ async def resolve(
         )
 
     # 3. Gemini AI
-    ai = await ask_nutrition(raw_name)
+    ai = await gemini.ask_nutrition(raw_name)
     if ai and "per_100g" in ai:
-        p    = ai["per_100g"]
-        name = ai.get("product_name", raw_name)
+        p     = ai["per_100g"]
+        name  = ai.get("product_name", raw_name)
         kcal  = float(p.get("calories", 0))
         prot  = float(p.get("protein",  0))
         fat_v = float(p.get("fat",      0))
