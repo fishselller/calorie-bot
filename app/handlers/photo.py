@@ -30,13 +30,12 @@ async def _get_or_create_user(uid: int, session) -> User:
 
 def _call_gemini_vision(image_bytes: bytes) -> dict | None:
     b64 = base64.standard_b64encode(image_bytes).decode()
-    prompt = (
-        "На фото упаковка продукта питания. "
-        "Извлеки ТОЛЬКО пищевую ценность на 100г. "
-        "Ответ строго в JSON: "
-        '{"product_name":"название продукта","per_100g":{"calories":343,"protein":7.0,"fat":0.6,"carbs":77.3}}'
-        " Замени числа на реальные с фото."
-    )
+
+    prompt = """Look at this food packaging image and extract nutrition facts per 100g.
+
+Output ONLY a JSON object, nothing else, no explanation, no text before or after:
+{"product_name":"<name>","per_100g":{"calories":<number>,"protein":<number>,"fat":<number>,"carbs":<number>}}"""
+
     payload = json.dumps({
         "contents": [{
             "parts": [
@@ -45,9 +44,8 @@ def _call_gemini_vision(image_bytes: bytes) -> dict | None:
             ]
         }],
         "generationConfig": {
-            "temperature": 0.1,
-            "maxOutputTokens": 200,
-            "responseMimeType": "application/json",
+            "temperature": 0.0,
+            "maxOutputTokens": 150,
         },
     }).encode()
 
@@ -69,18 +67,18 @@ def _call_gemini_vision(image_bytes: bytes) -> dict | None:
                     if "text" in p:
                         text += p["text"]
 
-            logger.info(f"Attempt {attempt+1} raw: {text[:400]}")
-            text = re.sub(r'```json|```', '', text).strip()
-            m = re.search(r'\{.*\}', text, re.DOTALL)
+            logger.info(f"Attempt {attempt+1}: {text[:300]}")
+
+            # Extract JSON from anywhere in the text
+            text_clean = re.sub(r'```json|```', '', text).strip()
+            m = re.search(r'\{[^{}]*"per_100g"[^{}]*\{[^{}]*\}[^{}]*\}', text_clean, re.DOTALL)
             if m:
                 result = json.loads(m.group())
                 p100 = result.get("per_100g", {})
-                if (result.get("product_name") and
-                    p100.get("calories") and p100.get("protein") is not None):
-                    logger.info(f"Success on attempt {attempt+1}: {result}")
+                if p100.get("calories") is not None:
+                    logger.info(f"Success: {result}")
                     return result
-                else:
-                    logger.warning(f"Incomplete JSON: {result}")
+
         except urllib.error.HTTPError as e:
             body = e.read().decode()
             logger.error(f"Attempt {attempt+1} HTTP {e.code}: {body[:200]}")
@@ -88,6 +86,9 @@ def _call_gemini_vision(image_bytes: bytes) -> dict | None:
                 time.sleep(3)
                 continue
             break
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON parse error: {e}")
+            time.sleep(1)
         except Exception as e:
             logger.error(f"Attempt {attempt+1} error: {e}")
             time.sleep(2)
