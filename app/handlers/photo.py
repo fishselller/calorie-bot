@@ -3,6 +3,7 @@ import base64
 import json
 import logging
 import re
+import time
 import urllib.request
 import urllib.error
 
@@ -45,15 +46,11 @@ def _call_gemini_vision(image_bytes: bytes) -> dict | None:
         "generationConfig": {"temperature": 0.1, "maxOutputTokens": 300},
     }).encode()
 
-    # Use exact model names from the API
-    models = [
-        "gemini-2.5-flash",
-        "gemini-2.0-flash",
-        "gemini-2.5-pro",
-    ]
+    model = "gemini-2.5-flash"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
 
-    for model in models:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
+    # Retry up to 3 times on 503
+    for attempt in range(3):
         req = urllib.request.Request(
             url, data=payload,
             headers={"Content-Type": "application/json"},
@@ -67,19 +64,23 @@ def _call_gemini_vision(image_bytes: bytes) -> dict | None:
                 for p in c.get("content", {}).get("parts", []):
                     if "text" in p:
                         text += p["text"]
-            logger.info(f"{model} response: {text[:300]}")
+            logger.info(f"Response: {text[:300]}")
             text = re.sub(r'```json|```', '', text).strip()
             m = re.search(r'\{.*\}', text, re.DOTALL)
             if m:
                 result = json.loads(m.group())
                 if "per_100g" in result:
-                    logger.info(f"Success: {model}")
                     return result
         except urllib.error.HTTPError as e:
             body = e.read().decode()
-            logger.error(f"{model} HTTP {e.code}: {body[:300]}")
+            logger.error(f"Attempt {attempt+1} HTTP {e.code}: {body[:200]}")
+            if e.code == 503:
+                time.sleep(3)
+                continue
+            break
         except Exception as e:
-            logger.error(f"{model} error: {e}")
+            logger.error(f"Attempt {attempt+1} error: {e}")
+            break
 
     return None
 
@@ -96,8 +97,6 @@ async def handle_photo(message: Message, bot: Bot) -> None:
     file  = await bot.get_file(photo.file_id)
     buf   = await bot.download_file(file.file_path)
     img   = buf.read()
-
-    logger.info(f"Photo size: {len(img)} bytes")
 
     result = await asyncio.get_event_loop().run_in_executor(
         None, lambda: _call_gemini_vision(img)
