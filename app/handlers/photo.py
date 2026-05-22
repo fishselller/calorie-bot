@@ -14,6 +14,7 @@ from aiogram.fsm.state import State, StatesGroup
 
 from app.db.engine import AsyncSessionLocal
 from app.db.models import User, Product
+from app.keyboards.inline import meal_type_keyboard
 from app.localization.texts import t
 from app.config import GEMINI_API_KEY
 
@@ -119,7 +120,6 @@ async def handle_photo(message: Message, bot: Bot, state: FSMContext) -> None:
 
     p = result["per_100g"]
 
-    # Save nutrition to state
     await state.update_data(photo_nutrition={
         "calories": float(p.get("calories", 0)),
         "protein":  float(p.get("protein",  0)),
@@ -176,7 +176,7 @@ async def handle_photo_weight(message: Message, state: FSMContext) -> None:
     carbs = round(nutrition["carbs"]    * factor, 1)
     name  = nutrition.get("product_name", "продукт")
 
-    # Save product to DB
+    # Save product to DB for future use
     async with AsyncSessionLocal() as session:
         from sqlalchemy import select
         existing = (await session.execute(
@@ -192,18 +192,22 @@ async def handle_photo_weight(message: Message, state: FSMContext) -> None:
             )
             session.add(prod)
             await session.commit()
+            logger.info(f"Saved new product: {name}")
 
-    await state.update_data(nutrition={
+    # Store pending for meal_type callback
+    if not hasattr(message.bot, '_pending'):
+        message.bot._pending = {}
+    message.bot._pending[message.from_user.id] = {
         "product_name": name,
         "grams":    weight,
         "calories": cal,
         "protein":  prot,
         "fat":      fat,
         "carbs":    carbs,
-    })
+        "lang":     lang,
+    }
+    await state.clear()
 
-    # Ask meal type
-    from app.keyboards.inline import meal_type_keyboard
     ask_meal = {
         "ru": f"✅ *{name}* — {weight:.0f}г\n🔥 {cal:.0f} ккал | 💪 Б {prot:.1f}г | 🧈 Ж {fat:.1f}г | 🍞 У {carbs:.1f}г\n\nК какому приёму пищи?",
         "uk": f"✅ *{name}* — {weight:.0f}г\n🔥 {cal:.0f} ккал | 💪 Б {prot:.1f}г | 🧈 Ж {fat:.1f}г | 🍞 У {carbs:.1f}г\n\nДо якого прийому їжі?",
@@ -214,20 +218,3 @@ async def handle_photo_weight(message: Message, state: FSMContext) -> None:
         parse_mode="Markdown",
         reply_markup=meal_type_keyboard(lang),
     )
-
-    # Store for meal_type callback
-    from datetime import date
-    from app.db.models import Meal
-    # Will be saved when user picks meal type via callback
-    # Store pending in bot data
-    message.bot["pending"] = message.bot.get("pending", {})
-    message.bot["pending"][message.from_user.id] = {
-        "product_name": name,
-        "grams":    weight,
-        "calories": cal,
-        "protein":  prot,
-        "fat":      fat,
-        "carbs":    carbs,
-        "lang":     lang,
-    }
-    await state.clear()

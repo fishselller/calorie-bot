@@ -16,10 +16,11 @@ from app.services.nutrition import resolve
 router = Router()
 
 ADD_TEXTS = {"➕ Добавить продукт", "➕ Додати продукт", "➕ Add product"}
+REPORT_TEXTS = {"📊 Отчёт за сегодня", "📊 Звіт за сьогодні", "📊 Today's report"}
 
 
 class FoodState(StatesGroup):
-    waiting_product = State()
+    waiting_product   = State()
     waiting_meal_type = State()
 
 
@@ -55,9 +56,9 @@ async def ask_product(message: Message, state: FSMContext) -> None:
         lang = user.language
     await state.set_state(FoodState.waiting_product)
     hints = {
-        "ru": "Напиши продукт и вес:\n`банан 150`\n`куриная грудка 200г`\n`гречка 250`",
-        "uk": "Напиши продукт та вагу:\n`банан 150`\n`куряча грудка 200г`\n`гречка 250`",
-        "en": "Write product and weight:\n`banana 150`\n`chicken breast 200g`\n`oatmeal 250`",
+        "ru": "Напиши продукт и вес:\n`банан 150`\n`куриная грудка 200г`",
+        "uk": "Напиши продукт та вагу:\n`банан 150`\n`куряча грудка 200г`",
+        "en": "Write product and weight:\n`banana 150`\n`chicken breast 200g`",
     }
     await message.answer(hints.get(lang, hints["ru"]), parse_mode="Markdown")
 
@@ -68,10 +69,12 @@ async def handle_product_input(message: Message, state: FSMContext) -> None:
     await _process_food(message)
 
 
-@router.message(F.text & ~F.text.startswith("/") & ~F.text.in_(ADD_TEXTS) & ~F.text.in_({
-    "📊 Отчёт за сегодня", "📊 Звіт за сьогодні", "📊 Today's report"
-}))
-async def handle_food_text(message: Message) -> None:
+@router.message(F.text & ~F.text.startswith("/") & ~F.text.in_(ADD_TEXTS) & ~F.text.in_(REPORT_TEXTS))
+async def handle_food_text(message: Message, state: FSMContext) -> None:
+    # Skip if in photo state
+    current = await state.get_state()
+    if current is not None:
+        return
     await _process_food(message)
 
 
@@ -100,8 +103,18 @@ async def _process_food(message: Message) -> None:
         )
         return
 
-    from aiogram.fsm.context import FSMContext
-    from aiogram.fsm.storage.base import StorageKey
+    # Store in dispatcher storage via bot data workaround
+    if not hasattr(message.bot, '_pending'):
+        message.bot._pending = {}
+    message.bot._pending[message.from_user.id] = {
+        "product_name": result.product_name,
+        "grams":        result.grams,
+        "calories":     result.calories,
+        "protein":      result.protein,
+        "fat":          result.fat,
+        "carbs":        result.carbs,
+        "lang":         lang,
+    }
 
     await processing.edit_text(
         f"✅ *{result.product_name}* — {result.grams:.0f}г\n"
@@ -112,23 +125,13 @@ async def _process_food(message: Message) -> None:
         reply_markup=meal_type_keyboard(lang),
     )
 
-    # Store pending data in bot's data store
-    message.bot["pending"] = message.bot.get("pending", {})
-    message.bot["pending"][message.from_user.id] = {
-        "product_name": result.product_name,
-        "grams":        result.grams,
-        "calories":     result.calories,
-        "protein":      result.protein,
-        "fat":          result.fat,
-        "carbs":        result.carbs,
-        "lang":         lang,
-    }
-
 
 @router.callback_query(lambda c: c.data and c.data.startswith("meal_type:"))
-async def save_meal_type(callback: CallbackQuery) -> None:
+async def save_meal_type(callback: CallbackQuery, state: FSMContext) -> None:
     meal_type = callback.data.split(":")[1]
-    pending   = callback.bot.get("pending", {})
+
+    # Get pending from bot attribute
+    pending = getattr(callback.bot, '_pending', {})
     nutrition = pending.pop(callback.from_user.id, None)
 
     if not nutrition:
