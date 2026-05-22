@@ -32,9 +32,10 @@ def _call_gemini_vision(image_bytes: bytes) -> dict | None:
     b64 = base64.standard_b64encode(image_bytes).decode()
     prompt = (
         "На фото упаковка продукта питания. "
-        "Найди и извлеки пищевую ценность на 100г продукта. "
-        "Верни ТОЛЬКО JSON без markdown: "
-        '{"product_name":"название","per_100g":{"calories":0,"protein":0,"fat":0,"carbs":0}}'
+        "Извлеки ТОЛЬКО пищевую ценность на 100г. "
+        "Ответ строго в JSON: "
+        '{"product_name":"название продукта","per_100g":{"calories":343,"protein":7.0,"fat":0.6,"carbs":77.3}}'
+        " Замени числа на реальные с фото."
     )
     payload = json.dumps({
         "contents": [{
@@ -43,34 +44,43 @@ def _call_gemini_vision(image_bytes: bytes) -> dict | None:
                 {"text": prompt},
             ]
         }],
-        "generationConfig": {"temperature": 0.1, "maxOutputTokens": 300},
+        "generationConfig": {
+            "temperature": 0.1,
+            "maxOutputTokens": 200,
+            "responseMimeType": "application/json",
+        },
     }).encode()
 
-    model = "gemini-2.5-flash"
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
 
-    # Retry up to 3 times on 503
-    for attempt in range(3):
+    for attempt in range(4):
         req = urllib.request.Request(
             url, data=payload,
             headers={"Content-Type": "application/json"},
             method="POST"
         )
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            with urllib.request.urlopen(req, timeout=40) as resp:
                 data = json.loads(resp.read().decode())
+
             text = ""
             for c in data.get("candidates", []):
                 for p in c.get("content", {}).get("parts", []):
                     if "text" in p:
                         text += p["text"]
-            logger.info(f"Response: {text[:300]}")
+
+            logger.info(f"Attempt {attempt+1} raw: {text[:400]}")
             text = re.sub(r'```json|```', '', text).strip()
             m = re.search(r'\{.*\}', text, re.DOTALL)
             if m:
                 result = json.loads(m.group())
-                if "per_100g" in result:
+                p100 = result.get("per_100g", {})
+                if (result.get("product_name") and
+                    p100.get("calories") and p100.get("protein") is not None):
+                    logger.info(f"Success on attempt {attempt+1}: {result}")
                     return result
+                else:
+                    logger.warning(f"Incomplete JSON: {result}")
         except urllib.error.HTTPError as e:
             body = e.read().decode()
             logger.error(f"Attempt {attempt+1} HTTP {e.code}: {body[:200]}")
@@ -80,7 +90,7 @@ def _call_gemini_vision(image_bytes: bytes) -> dict | None:
             break
         except Exception as e:
             logger.error(f"Attempt {attempt+1} error: {e}")
-            break
+            time.sleep(2)
 
     return None
 
