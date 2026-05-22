@@ -32,8 +32,8 @@ def _call_gemini_vision(image_bytes: bytes) -> dict | None:
     prompt = (
         "На фото упаковка продукта питания. "
         "Найди и извлеки пищевую ценность на 100г продукта. "
-        "Верни ТОЛЬКО JSON без markdown и пояснений: "
-        '{"product_name":"название продукта","per_100g":{"calories":число,"protein":число,"fat":число,"carbs":число}}'
+        "Верни ТОЛЬКО JSON без markdown: "
+        '{"product_name":"название","per_100g":{"calories":0,"protein":0,"fat":0,"carbs":0}}'
     )
     payload = json.dumps({
         "contents": [{
@@ -45,10 +45,16 @@ def _call_gemini_vision(image_bytes: bytes) -> dict | None:
         "generationConfig": {"temperature": 0.1, "maxOutputTokens": 300},
     }).encode()
 
-    models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
+    # Try both v1 and v1beta with different models
+    attempts = [
+        ("v1", "gemini-2.0-flash"),
+        ("v1", "gemini-1.5-flash"),
+        ("v1beta", "gemini-2.0-flash"),
+        ("v1beta", "gemini-2.0-flash-lite"),
+    ]
 
-    for model in models:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
+    for version, model in attempts:
+        url = f"https://generativelanguage.googleapis.com/{version}/models/{model}:generateContent?key={GEMINI_API_KEY}"
         req = urllib.request.Request(
             url, data=payload,
             headers={"Content-Type": "application/json"},
@@ -64,21 +70,19 @@ def _call_gemini_vision(image_bytes: bytes) -> dict | None:
                     if "text" in p:
                         text += p["text"]
 
-            logger.info(f"Gemini {model} response: {text[:200]}")
+            logger.info(f"{version}/{model} response: {text[:200]}")
             text = re.sub(r'```json|```', '', text).strip()
             m = re.search(r'\{.*\}', text, re.DOTALL)
             if m:
                 result = json.loads(m.group())
                 if "per_100g" in result:
-                    logger.info(f"Success with model: {model}")
+                    logger.info(f"Success: {version}/{model}")
                     return result
         except urllib.error.HTTPError as e:
             body = e.read().decode()
-            logger.error(f"Model {model} HTTP {e.code}: {body[:300]}")
-            continue
+            logger.error(f"{version}/{model} HTTP {e.code}: {body[:200]}")
         except Exception as e:
-            logger.error(f"Model {model} error: {e}")
-            continue
+            logger.error(f"{version}/{model} error: {e}")
 
     return None
 
@@ -96,7 +100,7 @@ async def handle_photo(message: Message, bot: Bot) -> None:
     buf   = await bot.download_file(file.file_path)
     img   = buf.read()
 
-    logger.info(f"Photo received, size: {len(img)} bytes, GEMINI_KEY: {GEMINI_API_KEY[:10]}...")
+    logger.info(f"Photo size: {len(img)} bytes")
 
     result = await asyncio.get_event_loop().run_in_executor(
         None, lambda: _call_gemini_vision(img)
