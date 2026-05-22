@@ -45,15 +45,15 @@ def _call_gemini_vision(image_bytes: bytes) -> dict | None:
         "generationConfig": {"temperature": 0.1, "maxOutputTokens": 300},
     }).encode()
 
-    attempts = [
-        ("v1beta", "gemini-2.5-flash-preview-05-20"),
-        ("v1beta", "gemini-2.5-pro-preview-05-06"),
-        ("v1beta", "gemini-2.0-flash-exp"),
-        ("v1beta", "gemini-exp-1206"),
+    # Use exact model names from the API
+    models = [
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemini-2.5-pro",
     ]
 
-    for version, model in attempts:
-        url = f"https://generativelanguage.googleapis.com/{version}/models/{model}:generateContent?key={GEMINI_API_KEY}"
+    for model in models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
         req = urllib.request.Request(
             url, data=payload,
             headers={"Content-Type": "application/json"},
@@ -67,7 +67,7 @@ def _call_gemini_vision(image_bytes: bytes) -> dict | None:
                 for p in c.get("content", {}).get("parts", []):
                     if "text" in p:
                         text += p["text"]
-            logger.info(f"{model} response: {text[:200]}")
+            logger.info(f"{model} response: {text[:300]}")
             text = re.sub(r'```json|```', '', text).strip()
             m = re.search(r'\{.*\}', text, re.DOTALL)
             if m:
@@ -77,7 +77,7 @@ def _call_gemini_vision(image_bytes: bytes) -> dict | None:
                     return result
         except urllib.error.HTTPError as e:
             body = e.read().decode()
-            logger.error(f"{model} HTTP {e.code}: {body[:200]}")
+            logger.error(f"{model} HTTP {e.code}: {body[:300]}")
         except Exception as e:
             logger.error(f"{model} error: {e}")
 
