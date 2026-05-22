@@ -14,7 +14,7 @@ import urllib.request
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN = "8911085987:AAGeZYdvsZlz3j_YDT30RhASI2dIKDUYLWc"
 GEMINI_API_KEY = "AIzaSyC_C67WdsZ02aJ7vkACjAvHFksiyGB2YuA"
-GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key={GEMINI_API_KEY}"
 KYIV_TZ = pytz.timezone("Europe/Kyiv")
 DB_PATH = "calories.db"
 
