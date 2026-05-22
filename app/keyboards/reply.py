@@ -3,9 +3,9 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
 def main_menu(lang: str = "ru") -> ReplyKeyboardMarkup:
     texts = {
-        "ru": ["📊 Отчёт за сегодня", "➕ Добавить продукт"],
-        "uk": ["📊 Звіт за сьогодні", "➕ Додати продукт"],
-        "en": ["📊 Today's report",   "➕ Add product"],
+        "ru": ["📊 Отчёт за сегодня", "❓ Как я работаю"],
+        "uk": ["📊 Звіт за сьогодні", "❓ Як я працюю"],
+        "en": ["📊 Today's report",   "❓ How I work"],
     }
     t = texts.get(lang, texts["ru"])
     return ReplyKeyboardMarkup(
