@@ -29,10 +29,7 @@ async def _get_or_create_user(uid: int, session) -> User:
 
 
 def _extract_json(text: str) -> dict | None:
-    """Extract JSON from text, handling markdown code blocks."""
-    # Remove markdown fences
     text = re.sub(r'```(?:json)?', '', text).strip()
-    # Find JSON object
     m = re.search(r'\{.*\}', text, re.DOTALL)
     if m:
         try:
@@ -46,10 +43,9 @@ def _call_gemini_vision(image_bytes: bytes) -> dict | None:
     b64 = base64.standard_b64encode(image_bytes).decode()
 
     prompt = (
-        "You are a nutrition data extractor. "
-        "Look at this food packaging and extract nutrition facts per 100g. "
-        "Return ONLY this JSON structure with real values from the label:\n"
-        '{"product_name":"Rice","per_100g":{"calories":343,"protein":7.0,"fat":0.6,"carbs":77.3}}'
+        "Extract nutrition facts per 100g from this food label. "
+        "Return ONLY JSON:\n"
+        '{"product_name":"name","per_100g":{"calories":0,"protein":0,"fat":0,"carbs":0}}'
     )
 
     payload = json.dumps({
@@ -61,7 +57,7 @@ def _call_gemini_vision(image_bytes: bytes) -> dict | None:
         }],
         "generationConfig": {
             "temperature": 0.0,
-            "maxOutputTokens": 200,
+            "maxOutputTokens": 1024,
         },
     }).encode()
 
@@ -83,20 +79,18 @@ def _call_gemini_vision(image_bytes: bytes) -> dict | None:
                     if "text" in p:
                         text += p["text"]
 
-            logger.info(f"Attempt {attempt+1} full: {repr(text[:500])}")
+            logger.info(f"Attempt {attempt+1}: {repr(text)}")
 
             result = _extract_json(text)
             if result:
                 p100 = result.get("per_100g", {})
-                if p100.get("calories") is not None:
-                    logger.info(f"Parsed OK: {result}")
+                if p100.get("calories") is not None and result.get("product_name"):
+                    logger.info(f"OK: {result}")
                     return result
-                else:
-                    logger.warning(f"Missing per_100g: {result}")
 
         except urllib.error.HTTPError as e:
             body = e.read().decode()
-            logger.error(f"HTTP {e.code}: {body[:200]}")
+            logger.error(f"HTTP {e.code}: {body[:300]}")
             if e.code == 503:
                 time.sleep(3)
                 continue
