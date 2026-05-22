@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import logging
 import re
 import urllib.request
 import urllib.error
@@ -14,6 +15,7 @@ from app.localization.texts import t
 from app.config import GEMINI_API_KEY
 
 router = Router()
+logger = logging.getLogger(__name__)
 
 
 async def _get_or_create_user(uid: int, session) -> User:
@@ -43,12 +45,7 @@ def _call_gemini_vision(image_bytes: bytes) -> dict | None:
         "generationConfig": {"temperature": 0.1, "maxOutputTokens": 300},
     }).encode()
 
-    # Try models in order
-    models = [
-        "gemini-2.0-flash",
-        "gemini-1.5-flash",
-        "gemini-1.5-pro",
-    ]
+    models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
 
     for model in models:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
@@ -67,18 +64,20 @@ def _call_gemini_vision(image_bytes: bytes) -> dict | None:
                     if "text" in p:
                         text += p["text"]
 
+            logger.info(f"Gemini {model} response: {text[:200]}")
             text = re.sub(r'```json|```', '', text).strip()
             m = re.search(r'\{.*\}', text, re.DOTALL)
             if m:
                 result = json.loads(m.group())
                 if "per_100g" in result:
-                    print(f"Success with model: {model}")
+                    logger.info(f"Success with model: {model}")
                     return result
         except urllib.error.HTTPError as e:
-            print(f"Model {model} failed: {e.code} {e.reason}")
+            body = e.read().decode()
+            logger.error(f"Model {model} HTTP {e.code}: {body[:300]}")
             continue
         except Exception as e:
-            print(f"Model {model} error: {e}")
+            logger.error(f"Model {model} error: {e}")
             continue
 
     return None
@@ -96,6 +95,8 @@ async def handle_photo(message: Message, bot: Bot) -> None:
     file  = await bot.get_file(photo.file_id)
     buf   = await bot.download_file(file.file_path)
     img   = buf.read()
+
+    logger.info(f"Photo received, size: {len(img)} bytes, GEMINI_KEY: {GEMINI_API_KEY[:10]}...")
 
     result = await asyncio.get_event_loop().run_in_executor(
         None, lambda: _call_gemini_vision(img)
