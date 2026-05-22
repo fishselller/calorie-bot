@@ -1,23 +1,29 @@
 import re
+from datetime import date
+
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
-from app.db import AsyncSessionLocal, User, Meal
-from app.keyboards import meal_type_keyboard, report_keyboard
-from app.localization import t
+from app.db.engine import AsyncSessionLocal
+from app.db.models import User, Meal
+from app.keyboards.inline import meal_type_keyboard
+from app.keyboards.reply import main_menu
+from app.localization.texts import t
 from app.services.nutrition import resolve
 
 router = Router()
 
+ADD_TEXTS = {"➕ Добавить продукт", "➕ Додати продукт", "➕ Add product"}
+
 
 class FoodState(StatesGroup):
+    waiting_product = State()
     waiting_meal_type = State()
 
 
 def _parse(text: str):
-    """Parse 'product 150' or '150 product'. Returns (product, weight) or None."""
     text = text.strip()
     for i, pat in enumerate([
         r'^(.+?)\s+(\d+(?:[.,]\d+)?)\s*(?:г|гр|грамм|g|gram)?$',
@@ -42,14 +48,39 @@ async def _get_or_create_user(uid: int, session) -> User:
     return user
 
 
-@router.message(F.text & ~F.text.startswith("/"))
-async def handle_food_text(message: Message, state: FSMContext) -> None:
-    parsed = _parse(message.text)
+@router.message(F.text.in_(ADD_TEXTS))
+async def ask_product(message: Message, state: FSMContext) -> None:
+    async with AsyncSessionLocal() as session:
+        user = await _get_or_create_user(message.from_user.id, session)
+        lang = user.language
+    await state.set_state(FoodState.waiting_product)
+    hints = {
+        "ru": "Напиши продукт и вес:\n`банан 150`\n`куриная грудка 200г`\n`гречка 250`",
+        "uk": "Напиши продукт та вагу:\n`банан 150`\n`куряча грудка 200г`\n`гречка 250`",
+        "en": "Write product and weight:\n`banana 150`\n`chicken breast 200g`\n`oatmeal 250`",
+    }
+    await message.answer(hints.get(lang, hints["ru"]), parse_mode="Markdown")
 
+
+@router.message(FoodState.waiting_product)
+async def handle_product_input(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await _process_food(message)
+
+
+@router.message(F.text & ~F.text.startswith("/") & ~F.text.in_(ADD_TEXTS) & ~F.text.in_({
+    "📊 Отчёт за сегодня", "📊 Звіт за сьогодні", "📊 Today's report"
+}))
+async def handle_food_text(message: Message) -> None:
+    await _process_food(message)
+
+
+async def _process_food(message: Message) -> None:
     async with AsyncSessionLocal() as session:
         user = await _get_or_create_user(message.from_user.id, session)
         lang = user.language
 
+    parsed = _parse(message.text)
     if not parsed:
         await message.answer(t("format_hint", lang), parse_mode="Markdown")
         return
@@ -60,7 +91,7 @@ async def handle_food_text(message: Message, state: FSMContext) -> None:
     )
 
     async with AsyncSessionLocal() as session:
-        user = await _get_or_create_user(message.from_user.id, session)
+        user   = await _get_or_create_user(message.from_user.id, session)
         result = await resolve(product, weight, session)
 
     if not result:
@@ -69,15 +100,8 @@ async def handle_food_text(message: Message, state: FSMContext) -> None:
         )
         return
 
-    await state.update_data(nutrition={
-        "product_name": result.product_name,
-        "grams":        result.grams,
-        "calories":     result.calories,
-        "protein":      result.protein,
-        "fat":          result.fat,
-        "carbs":        result.carbs,
-    })
-    await state.set_state(FoodState.waiting_meal_type)
+    from aiogram.fsm.context import FSMContext
+    from aiogram.fsm.storage.base import StorageKey
 
     await processing.edit_text(
         f"✅ *{result.product_name}* — {result.grams:.0f}г\n"
@@ -88,19 +112,33 @@ async def handle_food_text(message: Message, state: FSMContext) -> None:
         reply_markup=meal_type_keyboard(lang),
     )
 
+    # Store pending data in bot's data store
+    message.bot["pending"] = message.bot.get("pending", {})
+    message.bot["pending"][message.from_user.id] = {
+        "product_name": result.product_name,
+        "grams":        result.grams,
+        "calories":     result.calories,
+        "protein":      result.protein,
+        "fat":          result.fat,
+        "carbs":        result.carbs,
+        "lang":         lang,
+    }
 
-@router.callback_query(FoodState.waiting_meal_type,
-                       lambda c: c.data and c.data.startswith("meal_type:"))
-async def save_meal_type(callback: CallbackQuery, state: FSMContext) -> None:
+
+@router.callback_query(lambda c: c.data and c.data.startswith("meal_type:"))
+async def save_meal_type(callback: CallbackQuery) -> None:
     meal_type = callback.data.split(":")[1]
-    data      = await state.get_data()
-    nutrition = data.get("nutrition", {})
+    pending   = callback.bot.get("pending", {})
+    nutrition = pending.pop(callback.from_user.id, None)
+
+    if not nutrition:
+        await callback.answer("Попробуй снова")
+        return
+
+    lang = nutrition.get("lang", "ru")
 
     async with AsyncSessionLocal() as session:
         user = await _get_or_create_user(callback.from_user.id, session)
-        lang = user.language
-
-        from datetime import date
         meal = Meal(
             user_id      = user.id,
             product_name = nutrition["product_name"],
@@ -115,9 +153,6 @@ async def save_meal_type(callback: CallbackQuery, state: FSMContext) -> None:
         session.add(meal)
         await session.commit()
 
-    await state.clear()
-
-    meal_label = t(meal_type, lang)
     await callback.message.edit_text(
         t("meal_saved", lang,
           product   = nutrition["product_name"],
@@ -126,7 +161,7 @@ async def save_meal_type(callback: CallbackQuery, state: FSMContext) -> None:
           protein   = nutrition["protein"],
           fat       = nutrition["fat"],
           carbs     = nutrition["carbs"],
-          meal_type = meal_label),
+          meal_type = t(meal_type, lang)),
         parse_mode="Markdown",
     )
     await callback.answer()
