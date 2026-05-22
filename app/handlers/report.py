@@ -119,3 +119,68 @@ async def confirm_clear(callback: CallbackQuery) -> None:
             cancel = {"ru": "Отменено.", "uk": "Скасовано.", "en": "Cancelled."}
             await callback.message.edit_text(cancel.get(lang, cancel["ru"]))
     await callback.answer()
+
+
+@router.message(Command("reset"))
+async def cmd_reset(message: Message) -> None:
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    async with AsyncSessionLocal() as session:
+        user = await _get_or_create_user(message.from_user.id, session)
+        lang = user.language
+
+    confirm_texts = {
+        "ru": "⚠️ *Полный сброс аккаунта*\n\nБудет удалено:\n• Все записи еды\n• Дневник веса\n• Дневная норма\n• Язык\n\nЭто нельзя отменить!",
+        "uk": "⚠️ *Повний скид акаунту*\n\nБуде видалено:\n• Всі записи їжі\n• Щоденник ваги\n• Денна норма\n• Мова\n\nЦе не можна скасувати!",
+        "en": "⚠️ *Full account reset*\n\nWill be deleted:\n• All food records\n• Weight diary\n• Daily norms\n• Language\n\nThis cannot be undone!",
+    }
+    yes = {"ru": "✅ Да, сбросить всё", "uk": "✅ Так, скинути все", "en": "✅ Yes, reset all"}
+    no  = {"ru": "❌ Отмена",           "uk": "❌ Скасувати",      "en": "❌ Cancel"}
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=yes.get(lang, yes["ru"]), callback_data="reset:yes"),
+        InlineKeyboardButton(text=no.get(lang, no["ru"]),   callback_data="reset:no"),
+    ]])
+    await message.answer(
+        confirm_texts.get(lang, confirm_texts["ru"]),
+        reply_markup=kb,
+        parse_mode="Markdown"
+    )
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("reset:"))
+async def confirm_reset(callback: CallbackQuery) -> None:
+    action = callback.data.split(":")[1]
+
+    if action == "no":
+        cancel = {"ru": "Отменено.", "uk": "Скасовано.", "en": "Cancelled."}
+        async with AsyncSessionLocal() as session:
+            user = await _get_or_create_user(callback.from_user.id, session)
+            lang = user.language
+        await callback.message.edit_text(cancel.get(lang, cancel["ru"]))
+        await callback.answer()
+        return
+
+    async with AsyncSessionLocal() as session:
+        from sqlalchemy import delete
+        from app.db.models import WeightLog
+
+        # Delete all user data
+        await session.execute(delete(Meal).where(Meal.user_id == callback.from_user.id))
+        await session.execute(delete(WeightLog).where(WeightLog.user_id == callback.from_user.id))
+
+        user = await session.get(User, callback.from_user.id)
+        if user:
+            user.cal_norm  = None
+            user.prot_norm = None
+            user.fat_norm  = None
+            user.carb_norm = None
+            user.language  = None
+        await session.commit()
+
+    done = {
+        "ru": "✅ Аккаунт сброшен! Напиши /start чтобы начать заново.",
+        "uk": "✅ Акаунт скинуто! Напиши /start щоб почати знову.",
+        "en": "✅ Account reset! Type /start to begin again.",
+    }
+    await callback.message.edit_text(done.get("ru"))
+    await callback.answer()
