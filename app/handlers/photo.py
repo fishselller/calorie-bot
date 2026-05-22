@@ -28,13 +28,29 @@ async def _get_or_create_user(uid: int, session) -> User:
     return user
 
 
+def _extract_json(text: str) -> dict | None:
+    """Extract JSON from text, handling markdown code blocks."""
+    # Remove markdown fences
+    text = re.sub(r'```(?:json)?', '', text).strip()
+    # Find JSON object
+    m = re.search(r'\{.*\}', text, re.DOTALL)
+    if m:
+        try:
+            return json.loads(m.group())
+        except Exception:
+            pass
+    return None
+
+
 def _call_gemini_vision(image_bytes: bytes) -> dict | None:
     b64 = base64.standard_b64encode(image_bytes).decode()
 
-    prompt = """Look at this food packaging image and extract nutrition facts per 100g.
-
-Output ONLY a JSON object, nothing else, no explanation, no text before or after:
-{"product_name":"<name>","per_100g":{"calories":<number>,"protein":<number>,"fat":<number>,"carbs":<number>}}"""
+    prompt = (
+        "You are a nutrition data extractor. "
+        "Look at this food packaging and extract nutrition facts per 100g. "
+        "Return ONLY this JSON structure with real values from the label:\n"
+        '{"product_name":"Rice","per_100g":{"calories":343,"protein":7.0,"fat":0.6,"carbs":77.3}}'
+    )
 
     payload = json.dumps({
         "contents": [{
@@ -45,7 +61,7 @@ Output ONLY a JSON object, nothing else, no explanation, no text before or after
         }],
         "generationConfig": {
             "temperature": 0.0,
-            "maxOutputTokens": 150,
+            "maxOutputTokens": 200,
         },
     }).encode()
 
@@ -67,30 +83,26 @@ Output ONLY a JSON object, nothing else, no explanation, no text before or after
                     if "text" in p:
                         text += p["text"]
 
-            logger.info(f"Attempt {attempt+1}: {text[:300]}")
+            logger.info(f"Attempt {attempt+1} full: {repr(text[:500])}")
 
-            # Extract JSON from anywhere in the text
-            text_clean = re.sub(r'```json|```', '', text).strip()
-            m = re.search(r'\{[^{}]*"per_100g"[^{}]*\{[^{}]*\}[^{}]*\}', text_clean, re.DOTALL)
-            if m:
-                result = json.loads(m.group())
+            result = _extract_json(text)
+            if result:
                 p100 = result.get("per_100g", {})
                 if p100.get("calories") is not None:
-                    logger.info(f"Success: {result}")
+                    logger.info(f"Parsed OK: {result}")
                     return result
+                else:
+                    logger.warning(f"Missing per_100g: {result}")
 
         except urllib.error.HTTPError as e:
             body = e.read().decode()
-            logger.error(f"Attempt {attempt+1} HTTP {e.code}: {body[:200]}")
+            logger.error(f"HTTP {e.code}: {body[:200]}")
             if e.code == 503:
                 time.sleep(3)
                 continue
             break
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON parse error: {e}")
-            time.sleep(1)
         except Exception as e:
-            logger.error(f"Attempt {attempt+1} error: {e}")
+            logger.error(f"Error: {e}")
             time.sleep(2)
 
     return None
