@@ -15,18 +15,21 @@ router = Router()
 async def cmd_start(message: Message) -> None:
     async with AsyncSessionLocal() as session:
         user = await session.get(User, message.from_user.id)
-        # If user already has language — go straight to menu
         if user and user.language:
             lang = user.language
+            greet = {
+                "ru": "👋 Привет! Я считаю калории и БЖУ.",
+                "uk": "👋 Привіт! Я рахую калорії та БЖУ.",
+                "en": "👋 Hello! I track calories and macros.",
+            }
             await message.answer(
-                t("language_set", lang),
-                parse_mode="Markdown",
+                greet.get(lang, greet["ru"]),
                 reply_markup=main_menu(lang),
             )
             return
 
     await message.answer(
-        t("choose_language", "ru"),
+        "👋 Привіт! Обери мову / Привет! Выбери язык:",
         reply_markup=language_keyboard(),
     )
 
@@ -45,12 +48,12 @@ async def set_language(callback: CallbackQuery) -> None:
             user.language = lang
         await session.commit()
 
-    await callback.message.edit_text(
-        t("language_set", lang), parse_mode="Markdown"
-    )
-    # Send menu as new message
-    await callback.message.answer(
-        "👇",
-        reply_markup=main_menu(lang),
-    )
+    greet = {
+        "ru": "✅ Язык: Русский 🇷🇺\n\nЯ считаю калории и БЖУ.",
+        "uk": "✅ Мова: Українська 🇺🇦\n\nЯ рахую калорії та БЖУ.",
+        "en": "✅ Language: English 🇬🇧\n\nI track calories and macros.",
+    }
+
+    await callback.message.edit_text(greet.get(lang, greet["ru"]))
+    await callback.message.answer("👇", reply_markup=main_menu(lang))
     await callback.answer()
