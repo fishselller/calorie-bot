@@ -5,6 +5,8 @@ def create_scheduler(bot) -> AsyncIOScheduler:
     from app.scheduler.jobs import (
         send_morning_greetings,
         send_evening_reports,
+        send_lunch_reminder,
+        send_dinner_reminder,
         send_weight_reminder,
     )
 
@@ -17,6 +19,16 @@ def create_scheduler(bot) -> AsyncIOScheduler:
     scheduler.add_job(
         send_evening_reports, trigger="cron", minute="*",
         kwargs={"bot": bot}, id="evening",
+        replace_existing=True, misfire_grace_time=30,
+    )
+    scheduler.add_job(
+        send_lunch_reminder, trigger="cron", minute="*",
+        kwargs={"bot": bot}, id="lunch_reminder",
+        replace_existing=True, misfire_grace_time=30,
+    )
+    scheduler.add_job(
+        send_dinner_reminder, trigger="cron", minute="*",
+        kwargs={"bot": bot}, id="dinner_reminder",
         replace_existing=True, misfire_grace_time=30,
     )
     scheduler.add_job(
