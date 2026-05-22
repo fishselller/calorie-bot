@@ -24,26 +24,15 @@ async def resolve(
     grams: float,
     session: AsyncSession,
 ) -> Optional[NutritionResult]:
-    import app.services.food_db as food_db
-    import app.services.gemini as gemini
+    from app.services.food_db import lookup
+    from app.services.gemini  import ask_nutrition
 
     factor = grams / 100.0
 
-    # 1. Built-in DB
-    match = food_db.lookup(raw_name)
-    if match:
-        name, (kcal, prot, fat, carb) = match
-        return NutritionResult(
-            product_name=name, grams=grams,
-            calories=round(kcal * factor, 1),
-            protein=round(prot * factor, 1),
-            fat=round(fat * factor, 1),
-            carbs=round(carb * factor, 1),
-            source="db",
-        )
-
-    # 2. User-saved products
-    stmt = select(Product).where(Product.name.ilike(f"%{raw_name}%")).limit(1)
+    # 1. User-saved products (highest priority)
+    stmt = select(Product).where(
+        Product.name.ilike(f"%{raw_name.lower()}%")
+    ).limit(1)
     result = await session.execute(stmt)
     prod: Optional[Product] = result.scalar_one_or_none()
     if prod:
@@ -56,8 +45,21 @@ async def resolve(
             source="user_db",
         )
 
-    # 3. Gemini AI
-    ai = await gemini.ask_nutrition(raw_name)
+    # 2. Built-in DB
+    match = lookup(raw_name)
+    if match:
+        name, (kcal, prot, fat, carb) = match
+        return NutritionResult(
+            product_name=name, grams=grams,
+            calories=round(kcal * factor, 1),
+            protein=round(prot * factor, 1),
+            fat=round(fat * factor, 1),
+            carbs=round(carb * factor, 1),
+            source="db",
+        )
+
+    # 3. Gemini AI fallback
+    ai = await ask_nutrition(raw_name)
     if ai and "per_100g" in ai:
         p     = ai["per_100g"]
         name  = ai.get("product_name", raw_name)
@@ -65,8 +67,10 @@ async def resolve(
         prot  = float(p.get("protein",  0))
         fat_v = float(p.get("fat",      0))
         carb  = float(p.get("carbs",    0))
-        new_prod = Product(name=name.lower(), calories=kcal,
-                           protein=prot, fat=fat_v, carbs=carb)
+        new_prod = Product(
+            name=raw_name.lower(), calories=kcal,
+            protein=prot, fat=fat_v, carbs=carb,
+        )
         session.add(new_prod)
         try:
             await session.commit()
