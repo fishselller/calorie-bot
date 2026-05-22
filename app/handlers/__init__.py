@@ -9,6 +9,7 @@ def setup_routers() -> Router:
     from app.handlers.stats   import router as stats_router
     from app.handlers.norms   import router as norms_router
     from app.handlers.weekly  import router as weekly_router
+    from app.handlers.weight  import router as weight_router
     from app.handlers.food    import router as food_router
 
     root = Router()
@@ -19,5 +20,6 @@ def setup_routers() -> Router:
     root.include_router(stats_router)
     root.include_router(norms_router)
     root.include_router(weekly_router)
+    root.include_router(weight_router)
     root.include_router(food_router)
     return root

@@ -52,3 +52,13 @@ class Meal(Base):
     created_at   = Column(DateTime, server_default=func.now())
 
     user = relationship("User", back_populates="meals")
+
+
+class WeightLog(Base):
+    __tablename__ = "weight_log"
+
+    id         = Column(Integer, primary_key=True, autoincrement=True)
+    user_id    = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    weight     = Column(Float, nullable=False)
+    date       = Column(Date, default=date.today, index=True)
+    created_at = Column(DateTime, server_default=func.now())
