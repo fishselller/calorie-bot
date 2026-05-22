@@ -45,12 +45,11 @@ def _call_gemini_vision(image_bytes: bytes) -> dict | None:
         "generationConfig": {"temperature": 0.1, "maxOutputTokens": 300},
     }).encode()
 
-    # Try both v1 and v1beta with different models
     attempts = [
-        ("v1", "gemini-2.0-flash"),
-        ("v1", "gemini-1.5-flash"),
-        ("v1beta", "gemini-2.0-flash"),
-        ("v1beta", "gemini-2.0-flash-lite"),
+        ("v1beta", "gemini-2.5-flash-preview-05-20"),
+        ("v1beta", "gemini-2.5-pro-preview-05-06"),
+        ("v1beta", "gemini-2.0-flash-exp"),
+        ("v1beta", "gemini-exp-1206"),
     ]
 
     for version, model in attempts:
@@ -63,26 +62,24 @@ def _call_gemini_vision(image_bytes: bytes) -> dict | None:
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 data = json.loads(resp.read().decode())
-
             text = ""
             for c in data.get("candidates", []):
                 for p in c.get("content", {}).get("parts", []):
                     if "text" in p:
                         text += p["text"]
-
-            logger.info(f"{version}/{model} response: {text[:200]}")
+            logger.info(f"{model} response: {text[:200]}")
             text = re.sub(r'```json|```', '', text).strip()
             m = re.search(r'\{.*\}', text, re.DOTALL)
             if m:
                 result = json.loads(m.group())
                 if "per_100g" in result:
-                    logger.info(f"Success: {version}/{model}")
+                    logger.info(f"Success: {model}")
                     return result
         except urllib.error.HTTPError as e:
             body = e.read().decode()
-            logger.error(f"{version}/{model} HTTP {e.code}: {body[:200]}")
+            logger.error(f"{model} HTTP {e.code}: {body[:200]}")
         except Exception as e:
-            logger.error(f"{version}/{model} error: {e}")
+            logger.error(f"{model} error: {e}")
 
     return None
 
