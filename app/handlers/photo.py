@@ -3,6 +3,7 @@ import base64
 import json
 import re
 import urllib.request
+import urllib.error
 
 from aiogram import Router, F, Bot
 from aiogram.types import Message
@@ -13,11 +14,6 @@ from app.localization.texts import t
 from app.config import GEMINI_API_KEY
 
 router = Router()
-
-GEMINI_VISION_URL = (
-    "https://generativelanguage.googleapis.com/v1beta/models/"
-    "gemini-1.5-flash-latest:generateContent?key=" + "{key}"
-)
 
 
 async def _get_or_create_user(uid: int, session) -> User:
@@ -32,8 +28,10 @@ async def _get_or_create_user(uid: int, session) -> User:
 def _call_gemini_vision(image_bytes: bytes) -> dict | None:
     b64 = base64.standard_b64encode(image_bytes).decode()
     prompt = (
-        "На фото упаковка продукта. Извлеки название продукта и пищевую ценность на 100г. "
-        'Ответь ТОЛЬКО JSON без markdown: {"product_name":"...","per_100g":{"calories":0,"protein":0,"fat":0,"carbs":0}}'
+        "На фото упаковка продукта питания. "
+        "Найди и извлеки пищевую ценность на 100г продукта. "
+        "Верни ТОЛЬКО JSON без markdown и пояснений: "
+        '{"product_name":"название продукта","per_100g":{"calories":число,"protein":число,"fat":число,"carbs":число}}'
     )
     payload = json.dumps({
         "contents": [{
@@ -42,29 +40,47 @@ def _call_gemini_vision(image_bytes: bytes) -> dict | None:
                 {"text": prompt},
             ]
         }],
-        "generationConfig": {"temperature": 0.1, "maxOutputTokens": 400},
+        "generationConfig": {"temperature": 0.1, "maxOutputTokens": 300},
     }).encode()
 
-    url = GEMINI_VISION_URL.format(key=GEMINI_API_KEY)
-    req = urllib.request.Request(
-        url, data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST"
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read().decode())
-        text = ""
-        for c in data.get("candidates", []):
-            for p in c.get("content", {}).get("parts", []):
-                if "text" in p:
-                    text += p["text"]
-        text = re.sub(r'```json|```', '', text).strip()
-        m = re.search(r'\{.*\}', text, re.DOTALL)
-        if m:
-            return json.loads(m.group())
-    except Exception as e:
-        print(f"Gemini Vision error: {e}")
+    # Try models in order
+    models = [
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
+        "gemini-1.5-pro",
+    ]
+
+    for model in models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
+        req = urllib.request.Request(
+            url, data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = json.loads(resp.read().decode())
+
+            text = ""
+            for c in data.get("candidates", []):
+                for p in c.get("content", {}).get("parts", []):
+                    if "text" in p:
+                        text += p["text"]
+
+            text = re.sub(r'```json|```', '', text).strip()
+            m = re.search(r'\{.*\}', text, re.DOTALL)
+            if m:
+                result = json.loads(m.group())
+                if "per_100g" in result:
+                    print(f"Success with model: {model}")
+                    return result
+        except urllib.error.HTTPError as e:
+            print(f"Model {model} failed: {e.code} {e.reason}")
+            continue
+        except Exception as e:
+            print(f"Model {model} error: {e}")
+            continue
+
     return None
 
 
