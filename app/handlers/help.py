@@ -114,3 +114,30 @@ async def _get_lang(uid: int) -> str:
 async def show_help(message: Message) -> None:
     lang = await _get_lang(message.from_user.id)
     await message.answer(HELP_TEXTS.get(lang, HELP_TEXTS["ru"]), parse_mode="Markdown")
+
+
+CHANNEL_BUTTONS = {"📢 Наш канал", "📢 Our channel"}
+CHANNEL_URL = "https://t.me/yizhrakhuy"
+
+
+@router.message(F.text.in_(CHANNEL_BUTTONS))
+async def show_channel(message: Message) -> None:
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    lang = await _get_lang(message.from_user.id)
+
+    texts = {
+        "ru": "📢 Подписывайся на наш канал — советы по питанию, рецепты и лайфхаки каждый день!",
+        "uk": "📢 Підписуйся на наш канал — поради з харчування, рецепти та лайфхаки щодня!",
+        "en": "📢 Subscribe to our channel — nutrition tips, recipes and lifehacks every day!",
+    }
+    btn = {
+        "ru": "👉 Перейти на канал",
+        "uk": "👉 Перейти на канал",
+        "en": "👉 Go to channel",
+    }
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=btn.get(lang, btn["ru"]), url=CHANNEL_URL)
+    ]])
+
+    await message.answer(texts.get(lang, texts["ru"]), reply_markup=kb)
